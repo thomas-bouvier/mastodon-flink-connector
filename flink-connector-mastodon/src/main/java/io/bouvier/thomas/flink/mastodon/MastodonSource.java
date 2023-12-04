@@ -1,32 +1,16 @@
 package io.bouvier.thomas.flink.mastodon;
 
-import org.apache.flink.api.java.ClosureCleaner;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
-
 import org.mastodon4j.core.MastodonClient;
-import org.mastodon4j.core.api.Accounts;
-import org.mastodon4j.core.api.BaseMastodonApi;
 import org.mastodon4j.core.api.EventStream;
-import org.mastodon4j.core.api.Lists;
-import org.mastodon4j.core.api.MastodonApi;
-import org.mastodon4j.core.api.Statuses;
 import org.mastodon4j.core.api.Streaming;
-import org.mastodon4j.core.api.Timelines;
 import org.mastodon4j.core.api.entities.AccessToken;
-import org.mastodon4j.core.api.entities.Account;
-import org.mastodon4j.core.api.entities.Event;
-import org.mastodon4j.core.api.entities.MList;
-import org.mastodon4j.core.api.entities.Status;
 import org.mastodon4j.core.api.entities.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.Serializable;
-import java.util.Objects;
 import java.util.Properties;
 
 /**
@@ -96,10 +80,19 @@ public class MastodonSource extends RichSourceFunction<String> {
 
         LOG.info("Mastodon Streaming API connection established successfully");
 
-        // just wait now
-        while (running) {
-            synchronized (waitLock) {
-                waitLock.wait(100L);
+        try (EventStream stream = client.stream()) {
+            stream.registerConsumer(event -> {
+                if (!event.event().contains("delete")) {
+                    ctx.collect(event.payload());
+                }
+            });
+            Subscription subscription = Subscription.stream(true, accessToken, "public");
+            stream.changeSubscription(subscription);
+
+            while (running) {
+                synchronized (waitLock) {
+                    waitLock.wait(10L);
+                }
             }
         }
     }
