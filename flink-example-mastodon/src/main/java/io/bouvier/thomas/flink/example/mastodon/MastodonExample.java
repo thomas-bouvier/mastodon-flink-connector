@@ -33,6 +33,8 @@ import org.apache.flink.util.Collector;
 
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 
 import java.time.Duration;
 import java.util.StringTokenizer;
@@ -41,7 +43,7 @@ import java.util.StringTokenizer;
  * Implements the "MastodonStream" program that computes a most used word occurrence over JSON
  * objects in a streaming fashion.
  *
- * <p>The input is a Tweet stream from a MastodonSource.
+ * <p>The input is a Toot stream from a MastodonSource.
  *
  * <p>Usage: <code>Usage: MastodonExample [--output &lt;path&gt;]
  * [--mastodon-source.instanceString &lt;instance&gt; --mastodon-source.accessToken &lt;secret&gt;]
@@ -93,9 +95,12 @@ public class MastodonExample {
             streamSource = env.fromElements(MastodonExampleData.TEXTS);
         }
 
-        DataStream<Tuple2<String, Integer>> tweets =
+        // Print the elements from the source
+        //streamSource.print();
+
+        DataStream<Tuple2<String, Integer>> toots =
                 streamSource
-                        // selecting English tweets and splitting to (word, 1)
+                        // selecting English toots and splitting to (word, 1)
                         .flatMap(new SelectEnglishAndTokenizeFlatMap())
                         // group by words and sum their occurrences
                         .keyBy(value -> value.f0)
@@ -103,7 +108,7 @@ public class MastodonExample {
 
         // emit result
         if (params.has("output")) {
-            tweets.sinkTo(
+            toots.sinkTo(
                             FileSink.<Tuple2<String, Integer>>forRowFormat(
                                             new Path(params.get("output")),
                                             new SimpleStringEncoder<>())
@@ -116,7 +121,7 @@ public class MastodonExample {
                     .name("output");
         } else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
-            tweets.print();
+            toots.print();
         }
 
         // execute program
@@ -128,7 +133,7 @@ public class MastodonExample {
     // *************************************************************************
 
     /**
-     * Deserialize JSON from twitter source
+     * Deserialize JSON from Mastodon source
      *
      * <p>Implements a string tokenizer that splits sentences into words as a user-defined
      * FlatMapFunction. The function takes a line (String) and splits it into multiple pairs in the
@@ -148,13 +153,18 @@ public class MastodonExample {
             }
             JsonNode jsonNode = jsonParser.readValue(value, JsonNode.class);
             boolean isEnglish =
-                    jsonNode.has("user")
-                            && jsonNode.get("user").has("lang")
-                            && jsonNode.get("user").get("lang").asText().equals("en");
-            boolean hasText = jsonNode.has("text");
-            if (isEnglish && hasText) {
-                // message of tweet
-                StringTokenizer tokenizer = new StringTokenizer(jsonNode.get("text").asText());
+                    jsonNode.has("language")
+                            && jsonNode.get("language").asText().equals("en");
+            boolean hasContent = jsonNode.has("content");
+            if (isEnglish && hasContent) {
+                String content = jsonNode.get("content").asText();
+
+                // remove html tags
+                Document document = Jsoup.parse(content);
+                String contentWithoutHtmlTags = document.body().text();
+
+                // message of a toot
+                StringTokenizer tokenizer = new StringTokenizer(contentWithoutHtmlTags);
 
                 // split the message
                 while (tokenizer.hasMoreTokens()) {

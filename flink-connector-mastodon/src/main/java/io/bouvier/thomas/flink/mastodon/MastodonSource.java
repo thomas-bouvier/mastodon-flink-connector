@@ -31,7 +31,7 @@ public class MastodonSource extends RichSourceFunction<String> {
     // ----- Fields set by the constructor
 
     private final Properties properties;
-
+    private Streaming client;
     private transient Object waitLock;
     private transient boolean running = true;
 
@@ -67,8 +67,8 @@ public class MastodonSource extends RichSourceFunction<String> {
         AccessToken accessToken = AccessToken.create(
                 properties.getProperty(ACCESS_TOKEN)
         );
-        
-        Streaming client = MastodonClient.create(
+
+        client = MastodonClient.create(
                 properties.getProperty(INSTANCE_STRING),
                 accessToken).streaming();
 
@@ -78,11 +78,11 @@ public class MastodonSource extends RichSourceFunction<String> {
 
         try (EventStream stream = client.stream()) {
             stream.registerConsumer(event -> {
-                if (!event.event().contains("delete")) {
+                if (event.event().contains("update")) {
                     ctx.collect(event.payload());
                 }
             });
-            Subscription subscription = Subscription.stream(true, accessToken, "public");
+            Subscription subscription = Subscription.stream(true, accessToken, "public:remote");
             stream.changeSubscription(subscription);
 
             while (running) {
@@ -97,12 +97,6 @@ public class MastodonSource extends RichSourceFunction<String> {
     public void close() {
         this.running = false;
         LOG.info("Closing source");
-        /*
-        if (client != null) {
-            // client seems to be thread-safe
-            client.stop();
-        }
-        */
         // leave main method
         synchronized (waitLock) {
             waitLock.notify();
