@@ -32,9 +32,6 @@ public class MastodonSource extends RichSourceFunction<String> {
 
     private final Properties properties;
 
-    // ----- Runtime fields
-    private Streaming client;
-    private AccessToken accessToken;
     private transient Object waitLock;
     private transient boolean running = true;
 
@@ -50,7 +47,7 @@ public class MastodonSource extends RichSourceFunction<String> {
         this.properties = properties;
     }
 
-    private static void checkProperty(Properties p, String key) {
+    private static void checkProperty(Properties p, String key) throws IllegalArgumentException {
         if (!p.containsKey(key)) {
             throw new IllegalArgumentException("Required property '" + key + "' not set.");
         }
@@ -59,7 +56,7 @@ public class MastodonSource extends RichSourceFunction<String> {
     // ----- Source lifecycle
 
     @Override
-    public void open(Configuration parameters) throws Exception {
+    public void open(Configuration parameters) {
         waitLock = new Object();
     }
 
@@ -67,14 +64,13 @@ public class MastodonSource extends RichSourceFunction<String> {
     public void run(final SourceContext<String> ctx) throws Exception {
         LOG.info("Initializing Mastodon Streaming API connection");
 
-        accessToken = AccessToken.create(
+        AccessToken accessToken = AccessToken.create(
                 properties.getProperty(ACCESS_TOKEN)
         );
-
-        client =
-                MastodonClient.create(
-                        properties.getProperty(INSTANCE_STRING),
-                        accessToken).streaming();
+        
+        Streaming client = MastodonClient.create(
+                properties.getProperty(INSTANCE_STRING),
+                accessToken).streaming();
 
         running = true;
 
