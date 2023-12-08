@@ -19,7 +19,9 @@ package io.bouvier.thomas.flink.example.mastodon;
 
 import io.bouvier.thomas.flink.mastodon.MastodonSource;
 
+import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.serialization.SimpleStringEncoder;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
@@ -29,7 +31,6 @@ import org.apache.flink.core.fs.Path;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.filesystem.rollingpolicies.DefaultRollingPolicy;
-import org.apache.flink.util.Collector;
 
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
@@ -90,7 +91,7 @@ public class MastodonExample {
         } else {
             System.out.println("Executing MastodonStream example with default props.");
             System.out.println(
-                    "Use --mastodon-source.intanceString <instance> --mastodon-source.accessToken <token> to specify the authentication info.");
+                    "Use --mastodon-source.instanceString <instance> --mastodon-source.accessToken <token> to specify the authentication info.");
             // get default test text data
             streamSource = env.fromElements(MastodonExampleData.TEXTS);
         }
@@ -98,17 +99,32 @@ public class MastodonExample {
         // Print the elements from the source
         //streamSource.print();
 
-        DataStream<Tuple2<String, Integer>> toots =
+        // Get the english toots only
+        DataStream<String> englishToots =
                 streamSource
-                        // selecting English toots and splitting to (word, 1)
-                        .flatMap(new SelectEnglishAndTokenizeFlatMap())
-                        // group by words and sum their occurrences
-                        .keyBy(value -> value.f0)
-                        .sum(1);
+                        .filter(new EnglishFilter())
+                        .map(new PayloadMap());
+
+        DataStream<Tuple2<String, Integer>> tokenizedToots =
+                englishToots
+                    .flatMap((FlatMapFunction<String, Tuple2<String, Integer>>) (s, out) -> {
+                        StringTokenizer tokenizer = new StringTokenizer(s);
+
+                        // split the message
+                        while (tokenizer.hasMoreTokens()) {
+                            String result = tokenizer.nextToken().toLowerCase();
+
+                            if (!result.isEmpty()) {
+                                out.collect(new Tuple2<>(result, 1));
+                            }
+                        }
+                    })
+                    .keyBy(value -> value.f0)
+                    .sum(1);
 
         // emit result
         if (params.has("output")) {
-            toots.sinkTo(
+            tokenizedToots.sinkTo(
                             FileSink.<Tuple2<String, Integer>>forRowFormat(
                                             new Path(params.get("output")),
                                             new SimpleStringEncoder<>())
@@ -121,7 +137,7 @@ public class MastodonExample {
                     .name("output");
         } else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
-            toots.print();
+            tokenizedToots.print();
         }
 
         // execute program
@@ -132,49 +148,44 @@ public class MastodonExample {
     // USER FUNCTIONS
     // *************************************************************************
 
-    /**
-     * Deserialize JSON from Mastodon source
-     *
-     * <p>Implements a string tokenizer that splits sentences into words as a user-defined
-     * FlatMapFunction. The function takes a line (String) and splits it into multiple pairs in the
-     * form of "(word,1)" ({@code Tuple2<String, Integer>}).
-     */
-    public static class SelectEnglishAndTokenizeFlatMap
-            implements FlatMapFunction<String, Tuple2<String, Integer>> {
+    public static class EnglishFilter implements FilterFunction<String> {
         private static final long serialVersionUID = 1L;
 
         private transient ObjectMapper jsonParser;
 
-        /** Select the language from the incoming JSON text. */
         @Override
-        public void flatMap(String value, Collector<Tuple2<String, Integer>> out) throws Exception {
+        public boolean filter(String s) throws Exception {
             if (jsonParser == null) {
                 jsonParser = new ObjectMapper();
             }
-            JsonNode jsonNode = jsonParser.readValue(value, JsonNode.class);
+            JsonNode jsonNode = jsonParser.readValue(s, JsonNode.class);
+
             boolean isEnglish =
                     jsonNode.has("language")
                             && jsonNode.get("language").asText().equals("en");
             boolean hasContent = jsonNode.has("content");
-            if (isEnglish && hasContent) {
-                String content = jsonNode.get("content").asText();
 
-                // remove html tags
-                Document document = Jsoup.parse(content);
-                String contentWithoutHtmlTags = document.body().text();
+            return isEnglish && hasContent;
+        }
+    }
 
-                // message of a toot
-                StringTokenizer tokenizer = new StringTokenizer(contentWithoutHtmlTags);
+    public static class PayloadMap implements MapFunction<String, String> {
+        private static final long serialVersionUID = 1L;
 
-                // split the message
-                while (tokenizer.hasMoreTokens()) {
-                    String result = tokenizer.nextToken().replaceAll("\\s*", "").toLowerCase();
+        private transient ObjectMapper jsonParser;
 
-                    if (!result.equals("")) {
-                        out.collect(new Tuple2<>(result, 1));
-                    }
-                }
+        @Override
+        public String map(String s) throws Exception {
+            if (jsonParser == null) {
+                jsonParser = new ObjectMapper();
             }
+            JsonNode jsonNode = jsonParser.readValue(s, JsonNode.class);
+
+            String content = jsonNode.get("content").asText();
+
+            // remove html tags
+            Document document = Jsoup.parse(content);
+            return document.body().text();
         }
     }
 }
